@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, RequestUrlParam } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, requestUrl, RequestUrlParam, TFile } from 'obsidian';
 
 interface ChatPluginSettings {
 	selectedProvider: 'openai' | 'anthropic' | 'gemini';
@@ -8,6 +8,7 @@ interface ChatPluginSettings {
 	anthropicModel: string;
 	geminiApiKey: string;
 	geminiModel: string;
+	debugMode: boolean;
 }
 
 interface ChatMessage {
@@ -18,11 +19,12 @@ interface ChatMessage {
 const DEFAULT_SETTINGS: ChatPluginSettings = {
 	selectedProvider: 'openai',
 	openaiApiKey: '',
-	openaiModel: 'gpt-3.5-turbo',
+	openaiModel: 'gpt-5-mini',
 	anthropicApiKey: '',
 	anthropicModel: 'claude-3-opus-20240229',
 	geminiApiKey: '',
-	geminiModel: 'gemini-1.5-flash'
+	geminiModel: 'gemini-1.5-flash',
+	debugMode: false
 }
 
 export default class ChatPlugin extends Plugin {
@@ -35,7 +37,15 @@ export default class ChatPlugin extends Plugin {
 			id: 'chat-with-ai',
 			name: 'Chat with AI',
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				await this.handleChatCommand(editor);
+				await this.handleChatCommand(editor, view);
+			}
+		});
+
+		this.addCommand({
+			id: 'write-with-ai',
+			name: 'Write with AI',
+			editorCallback: async (editor: Editor, view: MarkdownView) => {
+				await this.handleChatCommand(editor, view, true);
 			}
 		});
 
@@ -54,7 +64,7 @@ export default class ChatPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	async handleChatCommand(editor: Editor) {
+	async handleChatCommand(editor: Editor, view: MarkdownView, writeMode: boolean = false) {
 		const textToChat = editor.getValue();
 
 		if (!textToChat.trim()) {
@@ -64,13 +74,34 @@ export default class ChatPlugin extends Plugin {
 
 		const messages = this.parseMessages(textToChat);
 
+		if (view.file) {
+			messages.unshift({
+				role: 'user',
+				content: `Note Title: ${view.file.basename}`
+			});
+		}
+
+		// Process links in messages
+		for (const msg of messages) {
+			if (msg.role === 'user' && view.file) {
+				msg.content = await this.processMessageLinks(msg.content, view.file);
+			}
+		}
+
 		new Notice(`Asking ${this.settings.selectedProvider}...`);
+		this.log('Sending messages to AI:', messages);
 
 		try {
 			const response = await this.callAI(messages);
 
 			const modelNameDisplay = this.getModelName(this.settings.selectedProvider);
-			const replyText = `\n\n___\nai::${modelNameDisplay}\n${response}\n___\n`;
+			let replyText = '';
+
+			if (writeMode) {
+				replyText = `\n${response}\n`;
+			} else {
+				replyText = `\n___\nai::${modelNameDisplay}\n${response}\n___\n`;
+			}
 
 			// Append to end of file
 			const lineCount = editor.lineCount();
@@ -100,7 +131,7 @@ export default class ChatPlugin extends Plugin {
 			let content = part;
 
 			// Check for ai:: prefix
-			if (part.startsWith('ai::')) {
+			if (part.contains('ai::')) {
 				isAssistant = true;
 				// Remove the ai::Line identifier
 				// We expect the format "ai::ModelName\nContent"
@@ -108,10 +139,8 @@ export default class ChatPlugin extends Plugin {
 				if (newlineIndex > 0) {
 					content = part.substring(newlineIndex + 1).trim();
 				} else {
-					// Fallback if no newline found, just strip the prefix? 
-					// Or maybe the whole block is just the header?
-					// Let's just strip the first line.
-					content = part.replace(/^ai::.*$/, '').trim();
+					// strip from the ai:: until the first nontext character
+					content = part.replace(/^ai::.*?[^\w]/, '').trim();
 				}
 			}
 
@@ -123,6 +152,41 @@ export default class ChatPlugin extends Plugin {
 
 		return messages;
 	}
+
+	async processMessageLinks(content: string, sourceFile: TFile): Promise<string> {
+		let modifiedContent = content;
+
+		// Regex for WikiLinks: [[Link]] or [[Link|Alias]]
+		const wikiLinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+
+		// Regex for Markdown links: [Text](Path)
+		const mdLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+		const matches: { path: string, match: string }[] = [];
+
+		let match;
+		while ((match = wikiLinkRegex.exec(content)) !== null) {
+			matches.push({ path: match[1], match: match[0] });
+		}
+		while ((match = mdLinkRegex.exec(content)) !== null) {
+			matches.push({ path: match[2], match: match[0] });
+		}
+
+		for (const m of matches) {
+			const linkpath = m.path;
+			const destFile = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourceFile.path);
+
+			if (destFile instanceof TFile && (destFile.extension === 'md' || destFile.extension === 'txt')) {
+				const fileContent = await this.app.vault.read(destFile);
+
+				// Append content to the block
+				modifiedContent += `\n--- Content of ${destFile.basename} ---\n${fileContent}\n--- End of ${destFile.basename} ---\n`;
+			}
+		}
+
+		return modifiedContent;
+	}
+
 	getModelName(provider: string): string {
 		switch (provider) {
 			case 'openai': return this.settings.openaiModel;
@@ -236,6 +300,11 @@ export default class ChatPlugin extends Plugin {
 			return "(No response text found)";
 		}
 	}
+	log(message: string, ...args: any[]) {
+		if (this.settings.debugMode) {
+			console.log(message, ...args);
+		}
+	}
 }
 
 class ChatSettingTab extends PluginSettingTab {
@@ -336,5 +405,14 @@ class ChatSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+		new Setting(containerEl)
+			.setName('Debug Mode')
+			.setDesc('Enable debug logging in console.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debugMode)
+				.onChange(async (value) => {
+					this.plugin.settings.debugMode = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 }
