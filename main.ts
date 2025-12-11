@@ -10,6 +10,11 @@ interface ChatPluginSettings {
 	geminiModel: string;
 }
 
+interface ChatMessage {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
 const DEFAULT_SETTINGS: ChatPluginSettings = {
 	selectedProvider: 'openai',
 	openaiApiKey: '',
@@ -57,13 +62,15 @@ export default class ChatPlugin extends Plugin {
 			return;
 		}
 
+		const messages = this.parseMessages(textToChat);
+
 		new Notice(`Asking ${this.settings.selectedProvider}...`);
 
 		try {
-			const response = await this.callAI(textToChat);
+			const response = await this.callAI(messages);
 
 			const modelNameDisplay = this.getModelName(this.settings.selectedProvider);
-			const replyText = `\n\n-- -\n${modelNameDisplay}: ${response} \n-- -\n`;
+			const replyText = `\n\n___\nai::${modelNameDisplay}\n${response}\n___\n`;
 
 			// Append to end of file
 			const lineCount = editor.lineCount();
@@ -75,6 +82,47 @@ export default class ChatPlugin extends Plugin {
 		}
 	}
 
+	parseMessages(text: string): ChatMessage[] {
+		// Split by any sequence of 3 or more underscores, allowing optional spaces between them
+		// Regex explanation:
+		// _       match an underscore
+		// \s*     match zero or more whitespace characters
+		// (?: ... ) non-capturing group
+		// {2,}    match the previous group 2 or more times (so total 3+ underscores)
+		const parts = text.split(/_(?:\s*_){2,}/);
+		const messages: ChatMessage[] = [];
+
+		for (let part of parts) {
+			part = part.trim();
+			if (!part) continue;
+
+			let isAssistant = false;
+			let content = part;
+
+			// Check for ai:: prefix
+			if (part.startsWith('ai::')) {
+				isAssistant = true;
+				// Remove the ai::Line identifier
+				// We expect the format "ai::ModelName\nContent"
+				const newlineIndex = part.indexOf('\n');
+				if (newlineIndex > 0) {
+					content = part.substring(newlineIndex + 1).trim();
+				} else {
+					// Fallback if no newline found, just strip the prefix? 
+					// Or maybe the whole block is just the header?
+					// Let's just strip the first line.
+					content = part.replace(/^ai::.*$/, '').trim();
+				}
+			}
+
+			messages.push({
+				role: isAssistant ? 'assistant' : 'user',
+				content: content
+			});
+		}
+
+		return messages;
+	}
 	getModelName(provider: string): string {
 		switch (provider) {
 			case 'openai': return this.settings.openaiModel;
@@ -84,26 +132,26 @@ export default class ChatPlugin extends Plugin {
 		}
 	}
 
-	async callAI(text: string): Promise<string> {
+	async callAI(messages: ChatMessage[]): Promise<string> {
 		const provider = this.settings.selectedProvider;
 
 		if (provider === 'openai') {
-			return this.callOpenAI(text);
+			return this.callOpenAI(messages);
 		} else if (provider === 'anthropic') {
-			return this.callAnthropic(text);
+			return this.callAnthropic(messages);
 		} else if (provider === 'gemini') {
-			return this.callGemini(text);
+			return this.callGemini(messages);
 		} else {
 			throw new Error('Unknown provider selected.');
 		}
 	}
 
-	async callOpenAI(text: string): Promise<string> {
+	async callOpenAI(messages: ChatMessage[]): Promise<string> {
 		if (!this.settings.openaiApiKey) throw new Error('OpenAI API Key not set.');
 
 		const requestBody = {
 			model: this.settings.openaiModel,
-			messages: [{ role: 'user', content: text }]
+			messages: messages
 		};
 
 		const response = await requestUrl({
@@ -124,13 +172,13 @@ export default class ChatPlugin extends Plugin {
 		return data.choices[0].message.content;
 	}
 
-	async callAnthropic(text: string): Promise<string> {
+	async callAnthropic(messages: ChatMessage[]): Promise<string> {
 		if (!this.settings.anthropicApiKey) throw new Error('Anthropic API Key not set.');
 
 		const requestBody = {
 			model: this.settings.anthropicModel,
 			max_tokens: 1024,
-			messages: [{ role: 'user', content: text }]
+			messages: messages
 		};
 
 		const response = await requestUrl({
@@ -152,15 +200,18 @@ export default class ChatPlugin extends Plugin {
 		return data.content[0].text;
 	}
 
-	async callGemini(text: string): Promise<string> {
+	async callGemini(messages: ChatMessage[]): Promise<string> {
 		if (!this.settings.geminiApiKey) throw new Error('Gemini API Key not set.');
 
 		const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.settings.geminiModel}:generateContent?key=${this.settings.geminiApiKey}`;
 
+		const contents = messages.map(msg => ({
+			role: msg.role === 'assistant' ? 'model' : 'user',
+			parts: [{ text: msg.content }]
+		}));
+
 		const requestBody = {
-			contents: [{
-				parts: [{ text: text }]
-			}]
+			contents: contents
 		};
 
 		const response = await requestUrl({
