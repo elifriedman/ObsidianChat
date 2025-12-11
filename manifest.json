@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-llm-chat",
 	"name": "LLM Chat",
-	"version": "1.0.0",
+	"version": "1.0.2",
 	"minAppVersion": "0.15.0",
 	"description": "Chat with AI models like OpenAI, Claude, and Gemini directly within your Obsidian notes.",
 	"author": "Obsidian",
