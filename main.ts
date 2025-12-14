@@ -39,8 +39,7 @@ You work with Obsidian-flavored Markdown and may reference existing notes using 
 Note content here
 </existing-note>
 
-Notes will be written in Markdown, including headings, lists, tasks, etc.
-Treat these notes as the user's knowledge base and project management and memory.
+Treat these notes as the user's knowledge base, project management, and memory.
 `
 }
 
@@ -109,7 +108,7 @@ export default class ChatPlugin extends Plugin {
 
 	async createProject(projectName: string) {
 		const folderName = `Project ${projectName}`;
-		const fileName = `Project ${projectName}.md`;
+		const fileName = `Project ${projectName} - Overview.md`;
 		const folderPath = folderName;
 		const filePath = `${folderPath}/${fileName}`;
 
@@ -388,8 +387,8 @@ Use this format: <create-note name="Note Title">Content to go in the note</creat
 
 		if (!overrides) overrides = {};
 
-		const overwriteDefaultPrompt = overrides.system && overrides.system.startsWith('+++');
-		if (overrides.system && overwriteDefaultPrompt) {
+		const appendToDefaultPrompt = overrides.system && overrides.system.startsWith('+++');
+		if (overrides.system && appendToDefaultPrompt) {
 			// Append mode: Remove the +++ and append to default
 			const appendContent = overrides.system.substring(3).trim();
 			overrides.system = `${this.settings.systemPrompt}\n${appendContent}`;
