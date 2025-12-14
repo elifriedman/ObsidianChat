@@ -9,11 +9,18 @@ interface ChatPluginSettings {
 	geminiApiKey: string;
 	geminiModel: string;
 	debugMode: boolean;
+	systemPrompt: string;
 }
 
 interface ChatMessage {
-	role: 'user' | 'assistant';
+	role: 'user' | 'assistant' | 'system';
 	content: string;
+}
+
+interface ChatContext {
+	provider?: 'openai' | 'anthropic' | 'gemini';
+	model?: string;
+	system?: string;
 }
 
 const DEFAULT_SETTINGS: ChatPluginSettings = {
@@ -24,7 +31,10 @@ const DEFAULT_SETTINGS: ChatPluginSettings = {
 	anthropicModel: 'claude-3-opus-20240229',
 	geminiApiKey: '',
 	geminiModel: 'gemini-1.5-flash',
-	debugMode: false
+	debugMode: false,
+	systemPrompt: `You are an intelligent assistant working within Obsidian. 
+Your output should be formatted in Markdown. 
+You can refer to other notes by using [[WikiLinks]].`
 }
 
 const PROJECT_TEMPLATE = `{{date}}
@@ -127,6 +137,7 @@ export default class ChatPlugin extends Plugin {
 
 	async handleChatCommand(editor: Editor, view: MarkdownView, writeMode: boolean = false) {
 		const textToChat = editor.getValue();
+		const overrides: ChatContext = {};
 
 		if (!textToChat.trim()) {
 			new Notice('No text found to chat with.');
@@ -141,6 +152,15 @@ export default class ChatPlugin extends Plugin {
 				role: 'user',
 				content: `Note Title: ${view.file.basename}`
 			});
+
+			// Check for Frontmatter Overrides
+			const cache = this.app.metadataCache.getFileCache(view.file);
+			if (cache && cache.frontmatter) {
+				const frontmatter = cache.frontmatter;
+				if (frontmatter.provider) overrides.provider = frontmatter.provider;
+				if (frontmatter.model) overrides.model = frontmatter.model;
+				if (frontmatter.system) overrides.system = frontmatter.system;
+			}
 
 			// Add Project Context if applicable
 			const projectContext = await this.getProjectContext(view.file);
@@ -163,9 +183,9 @@ export default class ChatPlugin extends Plugin {
 		this.log('Sending messages to AI:', messages);
 
 		try {
-			const response = await this.callAI(messages);
+			const response = await this.callAI(messages, overrides);
 
-			const modelNameDisplay = this.getModelName(this.settings.selectedProvider);
+			const modelNameDisplay = overrides.model || this.getModelName(overrides.provider || this.settings.selectedProvider);
 			let replyText = '';
 
 			if (writeMode) {
@@ -293,26 +313,45 @@ export default class ChatPlugin extends Plugin {
 		}
 	}
 
-	async callAI(messages: ChatMessage[]): Promise<string> {
-		const provider = this.settings.selectedProvider;
+	async callAI(messages: ChatMessage[], overrides?: ChatContext): Promise<string> {
+		const provider = overrides?.provider || this.settings.selectedProvider;
+
+		if (!overrides) overrides = {};
+
+		const overwriteDefaultPrompt = overrides.system && overrides.system.startsWith('+++');
+		if (overrides.system && overwriteDefaultPrompt) {
+			// Append mode: Remove the +++ and append to default
+			const appendContent = overrides.system.substring(3).trim();
+			overrides.system = `${this.settings.systemPrompt}\n${appendContent}`;
+		} else if (!overrides.system && this.settings.systemPrompt) {
+			// Fallback to default if no override
+			overrides.system = this.settings.systemPrompt;
+		}
 
 		if (provider === 'openai') {
-			return this.callOpenAI(messages);
+			return this.callOpenAI(messages, overrides);
 		} else if (provider === 'anthropic') {
-			return this.callAnthropic(messages);
+			return this.callAnthropic(messages, overrides);
 		} else if (provider === 'gemini') {
-			return this.callGemini(messages);
+			return this.callGemini(messages, overrides);
 		} else {
 			throw new Error('Unknown provider selected.');
 		}
 	}
 
-	async callOpenAI(messages: ChatMessage[]): Promise<string> {
+	async callOpenAI(messages: ChatMessage[], overrides?: ChatContext): Promise<string> {
 		if (!this.settings.openaiApiKey) throw new Error('OpenAI API Key not set.');
 
+		const model = overrides?.model || this.settings.openaiModel;
+		const messagesToSend = [...messages];
+
+		if (overrides?.system) {
+			messagesToSend.unshift({ role: 'system', content: overrides.system });
+		}
+
 		const requestBody = {
-			model: this.settings.openaiModel,
-			messages: messages
+			model: model,
+			messages: messagesToSend
 		};
 
 		const response = await requestUrl({
@@ -333,14 +372,20 @@ export default class ChatPlugin extends Plugin {
 		return data.choices[0].message.content;
 	}
 
-	async callAnthropic(messages: ChatMessage[]): Promise<string> {
+	async callAnthropic(messages: ChatMessage[], overrides?: ChatContext): Promise<string> {
 		if (!this.settings.anthropicApiKey) throw new Error('Anthropic API Key not set.');
 
-		const requestBody = {
-			model: this.settings.anthropicModel,
+		const model = overrides?.model || this.settings.anthropicModel;
+
+		const requestBody: any = {
+			model: model,
 			max_tokens: 1024,
 			messages: messages
 		};
+
+		if (overrides?.system) {
+			requestBody.system = overrides.system;
+		}
 
 		const response = await requestUrl({
 			url: 'https://api.anthropic.com/v1/messages',
@@ -361,19 +406,26 @@ export default class ChatPlugin extends Plugin {
 		return data.content[0].text;
 	}
 
-	async callGemini(messages: ChatMessage[]): Promise<string> {
+	async callGemini(messages: ChatMessage[], overrides?: ChatContext): Promise<string> {
 		if (!this.settings.geminiApiKey) throw new Error('Gemini API Key not set.');
 
-		const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.settings.geminiModel}:generateContent?key=${this.settings.geminiApiKey}`;
+		const model = overrides?.model || this.settings.geminiModel;
+		const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.settings.geminiApiKey}`;
 
 		const contents = messages.map(msg => ({
 			role: msg.role === 'assistant' ? 'model' : 'user',
 			parts: [{ text: msg.content }]
 		}));
 
-		const requestBody = {
+		const requestBody: any = {
 			contents: contents
 		};
+
+		if (overrides?.system) {
+			requestBody.systemInstruction = {
+				parts: [{ text: overrides.system }]
+			};
+		}
 
 		const response = await requestUrl({
 			url: url,
@@ -540,6 +592,18 @@ class ChatSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+
+		new Setting(containerEl)
+			.setName('System Prompt')
+			.setDesc('Global system prompt for the AI behavior.')
+			.addTextArea(text => text
+				.setPlaceholder('You are a helpful assistant...')
+				.setValue(this.plugin.settings.systemPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.systemPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
 		new Setting(containerEl)
 			.setName('Debug Mode')
 			.setDesc('Enable debug logging in console.')
