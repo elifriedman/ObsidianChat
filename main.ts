@@ -320,13 +320,13 @@ Use this format: <create-note name="Note Title">Content to go in the note</creat
 		for (const child of parent.children) {
 			if (child instanceof TFile) {
 				// skip current file
-				if (child.path === currentFile.path) continue;
+				if (child.basename === currentFile.basename || child.path === currentFile.path) continue;
 
 				// skip non-text files
 				if (child.extension !== 'md' && child.extension !== 'txt') continue;
 
 				const content = await this.app.vault.read(child);
-				context += `\n--- Content of ${child.basename} ---\n${content}\n--- End of ${child.basename} ---\n`;
+				context += `\n<existing-note name="${child.basename}">\n${content}\n</existing-note>\n`;
 			}
 		}
 
@@ -360,7 +360,7 @@ Use this format: <create-note name="Note Title">Content to go in the note</creat
 				const fileContent = await this.app.vault.read(destFile);
 
 				// Append content to the block
-				modifiedContent += `\n--- Content of ${destFile.basename} ---\n${fileContent}\n--- End of ${destFile.basename} ---\n`;
+				modifiedContent += `\n<existing-note name="${destFile.basename}">${fileContent}\n</existing-note>\n`;
 			}
 		}
 
