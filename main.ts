@@ -104,7 +104,7 @@ export default class ChatPlugin extends Plugin {
 
 			// Prepare content
 			let content = PROJECT_TEMPLATE;
-			content = content.replace('[[Project Chat]]', `[[Project ${projectName} - Chat]]`);
+			content = content.replace('[[Project Chat]]', `[[Project ${projectName}/Project ${projectName} - Chat]]`);
 
 			// Replace {{date}} if we want to be nice, though strictly not requested, it's good practice.
 			// Using basic ISO date for now.
@@ -136,10 +136,20 @@ export default class ChatPlugin extends Plugin {
 		const messages = this.parseMessages(textToChat);
 
 		if (view.file) {
+			// Add Note Title
 			messages.unshift({
 				role: 'user',
 				content: `Note Title: ${view.file.basename}`
 			});
+
+			// Add Project Context if applicable
+			const projectContext = await this.getProjectContext(view.file);
+			if (projectContext) {
+				messages.unshift({
+					role: 'user',
+					content: `Project Context:\n${projectContext}`
+				});
+			}
 		}
 
 		// Process links in messages
@@ -212,6 +222,32 @@ export default class ChatPlugin extends Plugin {
 		}
 
 		return messages;
+	}
+
+	async getProjectContext(currentFile: TFile): Promise<string> {
+		if (!currentFile.basename.startsWith('Project ')) {
+			return '';
+		}
+
+		const parent = currentFile.parent;
+		if (!parent) return '';
+
+		let context = '';
+
+		for (const child of parent.children) {
+			if (child instanceof TFile) {
+				// skip current file
+				if (child.path === currentFile.path) continue;
+
+				// skip non-text files
+				if (child.extension !== 'md' && child.extension !== 'txt') continue;
+
+				const content = await this.app.vault.read(child);
+				context += `\n--- Content of ${child.basename} ---\n${content}\n--- End of ${child.basename} ---\n`;
+			}
+		}
+
+		return context;
 	}
 
 	async processMessageLinks(content: string, sourceFile: TFile): Promise<string> {
