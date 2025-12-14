@@ -183,7 +183,21 @@ export default class ChatPlugin extends Plugin {
 		this.log('Sending messages to AI:', messages);
 
 		try {
-			const response = await this.callAI(messages, overrides);
+			// Inject Tool Instructions
+			if (!overrides.system) overrides.system = this.settings.systemPrompt;
+			overrides.system += `\n\nYOU HAVE THE ABILITY TO CREATE OR APPEND TO NOTES.
+Use this format: <create-note name="Note Title">Content to go in the note</create-note>
+- If the note exists, content will be appended to the end.
+- If not, it will be created.
+- The tag will be replaced by a link [[Note Title]] in the chat.
+- Do not markdown format the tag itself, just write it raw.`;
+
+			let response = await this.callAI(messages, overrides);
+
+			// Process Note Creation Tags
+			if (view.file) {
+				response = await this.processNoteCreation(response, view.file);
+			}
 
 			const modelNameDisplay = overrides.model || this.getModelName(overrides.provider || this.settings.selectedProvider);
 			let replyText = '';
@@ -202,6 +216,55 @@ export default class ChatPlugin extends Plugin {
 			console.error('AI Chat Error:', error);
 			new Notice(`Error: ${error.message} `);
 		}
+	}
+
+	async processNoteCreation(text: string, currentFile: TFile): Promise<string> {
+		const regex = /<create-note name="([^"]+)">([\s\S]*?)<\/create-note>/g;
+		let match;
+		const findings = [];
+
+		// Find all matches first to avoid issues while modifying string
+		while ((match = regex.exec(text)) !== null) {
+			findings.push({
+				fullMatch: match[0],
+				name: match[1],
+				content: match[2]
+			});
+		}
+
+		let processedText = text;
+
+		for (const item of findings) {
+			const { fullMatch, name, content } = item;
+
+			// Determine path: same folder as current file
+			const parentPath = currentFile.parent ? currentFile.parent.path : '/';
+			const fileName = `${name}.md`;
+			const filePath = parentPath === '/' ? fileName : `${parentPath}/${fileName}`;
+
+			try {
+				const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+
+				if (existingFile instanceof TFile) {
+					// Append
+					await this.app.vault.append(existingFile, `\n${content}`);
+					new Notice(`Appended to ${fileName}`);
+				} else {
+					// Create
+					await this.app.vault.create(filePath, content);
+					new Notice(`Created ${fileName}`);
+				}
+
+				// Replace the tag with a link
+				processedText = processedText.replace(fullMatch, `[[${name}]]`);
+
+			} catch (err) {
+				console.error(`Failed to handle note ${name}:`, err);
+				new Notice(`Failed to write note ${name}`);
+			}
+		}
+
+		return processedText;
 	}
 
 	parseMessages(text: string): ChatMessage[] {
