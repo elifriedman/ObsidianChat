@@ -27,6 +27,22 @@ const DEFAULT_SETTINGS: ChatPluginSettings = {
 	debugMode: false
 }
 
+const PROJECT_TEMPLATE = `{{date}}
+
+[[Project Chat]]
+# Overview
+## Description
+Brief description of the project.
+## Mission
+Why are you working on this? This will help you make decisions.
+## Directions
+What are some ways to accomplish this project?
+# Progress
+## Tasks
+- [ ] 
+
+## General Notes`;
+
 export default class ChatPlugin extends Plugin {
 	settings: ChatPluginSettings;
 
@@ -49,6 +65,16 @@ export default class ChatPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: 'new-project',
+			name: 'New Project',
+			callback: () => {
+				new NewProjectModal(this.app, (result) => {
+					this.createProject(result);
+				}).open();
+			}
+		});
+
 		this.addSettingTab(new ChatSettingTab(this.app, this));
 	}
 
@@ -62,6 +88,41 @@ export default class ChatPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async createProject(projectName: string) {
+		const folderName = `Project ${projectName}`;
+		const fileName = `Project ${projectName}.md`;
+		const folderPath = folderName;
+		const filePath = `${folderPath}/${fileName}`;
+
+		try {
+			// Create folder
+			if (!await this.app.vault.adapter.exists(folderPath)) {
+				await this.app.vault.createFolder(folderPath);
+			}
+
+			// Prepare content
+			let content = PROJECT_TEMPLATE;
+			content = content.replace('[[Project Chat]]', `[[Project ${projectName} - Chat]]`);
+
+			// Replace {{date}} if we want to be nice, though strictly not requested, it's good practice.
+			// Using basic ISO date for now.
+			content = content.replace('{{date}}', new Date().toISOString().split('T')[0]);
+
+			// Create file
+			const file = await this.app.vault.create(filePath, content);
+
+			// Open file
+			const leaf = this.app.workspace.getLeaf(false);
+			await leaf.openFile(file);
+
+			new Notice(`Created project: ${projectName}`);
+
+		} catch (error) {
+			console.error('Failed to create project:', error);
+			new Notice(`Error creating project: ${error.message}`);
+		}
 	}
 
 	async handleChatCommand(editor: Editor, view: MarkdownView, writeMode: boolean = false) {
@@ -304,6 +365,44 @@ export default class ChatPlugin extends Plugin {
 		if (this.settings.debugMode) {
 			console.log(message, ...args);
 		}
+	}
+}
+
+class NewProjectModal extends Modal {
+	result: string;
+	onSubmit: (result: string) => void;
+
+	constructor(app: App, onSubmit: (result: string) => void) {
+		super(app);
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+
+		contentEl.createEl('h2', { text: 'New Project' });
+
+		new Setting(contentEl)
+			.setName('Project Name')
+			.setDesc('Enter the name of your new project')
+			.addText(text => text
+				.onChange((value) => {
+					this.result = value;
+				}));
+
+		new Setting(contentEl)
+			.addButton(btn => btn
+				.setButtonText('Create')
+				.setCta()
+				.onClick(() => {
+					this.close();
+					this.onSubmit(this.result);
+				}));
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
 	}
 }
 
