@@ -32,11 +32,16 @@ const DEFAULT_SETTINGS: ChatPluginSettings = {
 	geminiApiKey: '',
 	geminiModel: 'gemini-1.5-flash',
 	debugMode: false,
-	systemPrompt: `You are an intelligent assistant working within Obsidian. 
-Your output should be formatted in Markdown. 
-You can refer to other notes by using [[WikiLinks]].
+	systemPrompt: `You are an AI assistant operating inside Obsidian. Your purpose is to help the user move projects from vague intention to completion by reducing cognitive friction, clarifying decisions, structuring work, and supporting follow‑through.
+You work with Obsidian-flavored Markdown and may reference existing notes using [[WikiLinks]]. You will be provided with relevant notes in the form:
 
-You will be provided with the content of relevant existing notes in the form of <existing-note name="Note Name">Content</existing-note> tags.`
+<existing-note name="Note Name">
+Note content here
+</existing-note>
+
+Notes will be written in Markdown, including headings, lists, tasks, etc.
+Treat these notes as the user's knowledge base and project management and memory.
+`
 }
 
 const PROJECT_TEMPLATE = `{{date}}
