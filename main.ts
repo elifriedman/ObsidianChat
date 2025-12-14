@@ -34,7 +34,9 @@ const DEFAULT_SETTINGS: ChatPluginSettings = {
 	debugMode: false,
 	systemPrompt: `You are an intelligent assistant working within Obsidian. 
 Your output should be formatted in Markdown. 
-You can refer to other notes by using [[WikiLinks]].`
+You can refer to other notes by using [[WikiLinks]].
+
+You will be provided with the content of relevant existing notes in the form of <existing-note name="Note Name">Content</existing-note> tags.`
 }
 
 const PROJECT_TEMPLATE = `{{date}}
