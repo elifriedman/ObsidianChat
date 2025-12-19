@@ -40,6 +40,16 @@ Note content here
 </existing-note>
 
 Treat these notes as the user's knowledge base, project management, and memory.
+
+YOU HAVE THE ABILITY TO CREATE OR APPEND TO NOTES.
+Use this format: <create-note name="Note Title">Content to go in the note</create-note>
+- If the note exists, content will be appended to the end.
+- If not, it will be created.
+- The tag will be replaced by a link [[Note Title]] in the chat.
+- Do not markdown format the tag itself, just write it raw.
+
+You are not required to use this tool, but you may if it is relevant to the task.
+
 `
 }
 
@@ -142,7 +152,12 @@ export default class ChatPlugin extends Plugin {
 	}
 
 	async handleChatCommand(editor: Editor, view: MarkdownView, writeMode: boolean = false) {
-		const textToChat = editor.getValue();
+		let textToChat = editor.getValue();
+
+		// Remove frontmatter from the content sent to AI
+		const frontmatterRegex = /^---\s*[\s\S]*?\n---\s*(\n|$)/;
+		textToChat = textToChat.replace(frontmatterRegex, '');
+
 		const overrides: ChatContext = {};
 
 		if (!textToChat.trim()) {
@@ -185,18 +200,10 @@ export default class ChatPlugin extends Plugin {
 			}
 		}
 
-		new Notice(`Asking ${this.settings.selectedProvider}...`);
-		this.log('Sending messages to AI:', messages);
-
 		try {
 			// Inject Tool Instructions
-			if (!overrides.system) overrides.system = this.settings.systemPrompt;
-			overrides.system += `\n\nYOU HAVE THE ABILITY TO CREATE OR APPEND TO NOTES.
-Use this format: <create-note name="Note Title">Content to go in the note</create-note>
-- If the note exists, content will be appended to the end.
-- If not, it will be created.
-- The tag will be replaced by a link [[Note Title]] in the chat.
-- Do not markdown format the tag itself, just write it raw.`;
+			if (!overrides.system)
+				overrides.system = this.settings.systemPrompt;
 
 			let response = await this.callAI(messages, overrides);
 
@@ -396,6 +403,9 @@ Use this format: <create-note name="Note Title">Content to go in the note</creat
 			// Fallback to default if no override
 			overrides.system = this.settings.systemPrompt;
 		}
+
+		new Notice(`Asking ${provider}...`);
+		this.log('Sending messages to AI:', [{ "system": overrides.system }, ...messages]);
 
 		if (provider === 'openai') {
 			return this.callOpenAI(messages, overrides);
