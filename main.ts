@@ -200,6 +200,32 @@ export default class ChatPlugin extends Plugin {
 			}
 		}
 
+		if (writeMode) {
+			const selection = editor.getSelection();
+			const cursorFrom = editor.getCursor('from');
+			const cursorTo = editor.getCursor('to');
+			const contentBefore = editor.getRange({ line: 0, ch: 0 }, cursorFrom);
+			const contentAfter = editor.getRange(cursorTo, { line: editor.lineCount(), ch: 0 });
+
+			messages.push({
+				role: 'user',
+				content: `[INLINE WRITING TASK]
+The user wants you to generate text to be inserted at their cursor in the document.
+${selection ? `The user has SELECTED the following text: "${selection}"\nYour task is to REPLACE this selection with your response.` : "Your task is to INSERT text at the cursor position."}
+
+CONTEXT BEFORE CURSOR:
+${contentBefore}
+
+CONTEXT AFTER CURSOR:
+${contentAfter}
+
+INSTRUCTION: 
+Based on the prompt and the surrounding context, provide the text to be inserted/replaced. 
+Output ONLY the replacement text. Do not include any chat markers (like ai::), headers, or explanations. 
+If the user's prompt was a request, perform it and output only the result.`
+			});
+		}
+
 		try {
 			// Inject Tool Instructions
 			if (!overrides.system)
@@ -216,14 +242,18 @@ export default class ChatPlugin extends Plugin {
 			let replyText = '';
 
 			if (writeMode) {
-				replyText = `\n${response}\n`;
+				replyText = response;
 			} else {
 				replyText = `\n___\nai::${modelNameDisplay}\n${response}\n___\n`;
 			}
 
-			// Append to end of file
-			const lineCount = editor.lineCount();
-			editor.replaceRange(replyText, { line: lineCount, ch: 0 });
+			if (writeMode) {
+				editor.replaceSelection(replyText);
+			} else {
+				// Append to end of file
+				const lineCount = editor.lineCount();
+				editor.replaceRange(replyText, { line: lineCount, ch: 0 });
+			}
 
 		} catch (error) {
 			console.error('AI Chat Error:', error);
@@ -438,7 +468,7 @@ export default class ChatPlugin extends Plugin {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${this.settings.openaiApiKey} `
+				'Authorization': `Bearer ${this.settings.openaiApiKey}`
 			},
 			body: JSON.stringify(requestBody)
 		});
@@ -516,6 +546,9 @@ export default class ChatPlugin extends Plugin {
 		});
 
 		if (response.status >= 400) {
+			if (response.json.error.message) {
+				throw new Error(`Gemini request failed: ${response.status} ${response.json.error.message}`);
+			}
 			throw new Error(`Gemini request failed: ${response.status} ${response.text}`);
 		}
 
