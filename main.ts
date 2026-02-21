@@ -53,21 +53,7 @@ You are not required to use this tool, but you may if it is relevant to the task
 `
 }
 
-const PROJECT_TEMPLATE = `{{date}}
 
-[[Project Chat]]
-# Overview
-## Description
-Brief description of the project.
-## Mission
-Why are you working on this? This will help you make decisions.
-## Directions
-What are some ways to accomplish this project?
-# Progress
-## Tasks
-- [ ] 
-
-## General Notes`;
 
 export default class ChatPlugin extends Plugin {
 	settings: ChatPluginSettings;
@@ -117,9 +103,8 @@ export default class ChatPlugin extends Plugin {
 	}
 
 	async createProject(projectName: string) {
-		const folderName = `Project ${projectName}`;
-		const fileName = `Project ${projectName} - Overview.md`;
-		const folderPath = folderName;
+		const folderPath = `Projects/${projectName}`;
+		const fileName = `${projectName} - Overview.md`;
 		const filePath = `${folderPath}/${fileName}`;
 
 		try {
@@ -129,8 +114,48 @@ export default class ChatPlugin extends Plugin {
 			}
 
 			// Prepare content
-			let content = PROJECT_TEMPLATE;
-			content = content.replace('[[Project Chat]]', `[[Project ${projectName}/Project ${projectName} - Chat]]`);
+			let content = '';
+			const app = this.app as any;
+			let templatesDir = app.internalPlugins?.plugins?.templates?.instance?.options?.folder;
+			// Fallback to default templates folder if not set or plugin not enabled
+			if (!templatesDir) {
+				templatesDir = 'Templates';
+			}
+			const templatePath = `${templatesDir}/Project.md`;
+			const templateFile = this.app.vault.getAbstractFileByPath(templatePath);
+			if (templateFile instanceof TFile) {
+				content = await this.app.vault.read(templateFile);
+			} else {
+				// Create default template if it doesn't exist
+				content = `{{date}} #project
+
+[[Project Chat]]
+# Overview
+## Description
+Brief description of the project.
+## Mission
+Why are you working on this? This will help you make decisions.
+## Directions
+What are some ways to accomplish this project?
+# Progress
+## Tasks
+- [ ] 
+
+## General Notes`;
+
+				try {
+					if (!await this.app.vault.adapter.exists(templatesDir)) {
+						await this.app.vault.createFolder(templatesDir);
+					}
+					await this.app.vault.create(templatePath, content);
+					new Notice(`Created default project template at ${templatePath}`);
+				} catch (error) {
+					console.error('Failed to create default template:', error);
+					new Notice('Failed to create default template file');
+				}
+			}
+
+			content = content.replace('#project', `#project #${projectName.toLowerCase().replace(/\s/g, '-')}`);
 
 			// Replace {{date}} if we want to be nice, though strictly not requested, it's good practice.
 			// Using basic ISO date for now.
@@ -351,9 +376,17 @@ If the user's prompt was a request, perform it and output only the result.`
 	}
 
 	async getProjectContext(currentFile: TFile): Promise<string> {
-		if (!currentFile.basename.startsWith('Project ')) {
-			return '';
+		// Return if we're not in a subfolder of Projects
+		let parentFolder = currentFile.parent;
+		let foundProjects = false;
+		while (parentFolder) {
+			if (parentFolder.name === 'Projects') {
+				foundProjects = true;
+				break;
+			}
+			parentFolder = parentFolder.parent;
 		}
+		if (!foundProjects) return '';
 
 		const parent = currentFile.parent;
 		if (!parent) return '';
